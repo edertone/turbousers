@@ -3,6 +3,7 @@ import {
   IsEmail,
   IsEnum,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -12,7 +13,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { Role, UserStatus } from '@prisma/client';
+import { UserStatus } from '@prisma/client';
 
 const PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 
@@ -41,12 +42,17 @@ export class CreateUserDto {
   phone?: string;
 
   @IsOptional()
-  @IsEnum(Role)
-  role?: Role;
+  @IsArray()
+  @IsUUID('4', { each: true })
+  roleIds?: string[];
 
   @IsOptional()
   @IsEnum(UserStatus)
   status?: UserStatus;
+
+  @IsOptional()
+  @IsObject()
+  data?: Record<string, unknown>;
 
   @IsOptional()
   @IsString()
@@ -67,12 +73,17 @@ export class UpdateUserDto {
   phone?: string;
 
   @IsOptional()
-  @IsEnum(Role)
-  role?: Role;
+  @IsArray()
+  @IsUUID('4', { each: true })
+  roleIds?: string[];
 
   @IsOptional()
   @IsEnum(UserStatus)
   status?: UserStatus;
+
+  @IsOptional()
+  @IsObject()
+  data?: Record<string, unknown>;
 
   @IsOptional()
   @IsString()
@@ -95,8 +106,8 @@ export class QueryUsersDto {
   search?: string;
 
   @IsOptional()
-  @IsEnum(Role)
-  role?: Role;
+  @IsString()
+  role?: string;
 
   @IsOptional()
   @IsEnum(UserStatus)

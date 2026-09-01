@@ -1,10 +1,15 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
-import { User } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
-export type AuthUser = Pick<
-  User,
-  'id' | 'email' | 'role' | 'status' | 'firstName' | 'lastName'
->;
+export type AuthUser = {
+  id: string;
+  email: string;
+  status: string;
+  firstName: string | null;
+  lastName: string | null;
+  roles: string[];
+  data?: Prisma.JsonValue | null;
+};
 
 export const CurrentUser = createParamDecorator(
   (data: keyof AuthUser | undefined, ctx: ExecutionContext) => {

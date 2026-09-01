@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, Role, UserStatus } from '@prisma/client';
+import { Prisma, UserStatus } from '@prisma/client';
 import { hash } from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -17,16 +17,41 @@ import { AuthUser } from '../common/decorators/current-user.decorator';
 const PUBLIC_SELECT = {
   id: true,
   email: true,
-  role: true,
   status: true,
   emailVerified: true,
   firstName: true,
   lastName: true,
   phone: true,
+  data: true,
   lastLoginAt: true,
   createdAt: true,
   updatedAt: true,
+  roles: {
+    orderBy: { role: { name: 'asc' } },
+    select: {
+      role: { select: { id: true, name: true, description: true } },
+    },
+  },
 } as const;
+
+type RoleConnection = {
+  role: { id: string; name: string; description: string | null };
+};
+
+type SerializedUser = {
+  id: string;
+  email: string;
+  status: UserStatus;
+  emailVerified: boolean;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  data: Prisma.JsonValue | null;
+  lastLoginAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  roles: RoleConnection[];
+};
 
 @Injectable()
 export class UsersService {
@@ -39,21 +64,28 @@ export class UsersService {
       throw new BadRequestException('Email is already in use.');
     }
 
+    const roleIds = await this.validateRoleIds(dto.roleIds ?? []);
     const passwordHash = await hash(dto.password, 10);
 
-    return this.prisma.user.create({
+    const user = await this.prisma.user.create({
       data: {
         email,
         passwordHash,
         firstName: dto.firstName,
         lastName: dto.lastName,
         phone: dto.phone,
-        role: dto.role ?? Role.USER,
+        data: (dto.data ?? Prisma.JsonNull) as Prisma.InputJsonValue,
         status: dto.status ?? UserStatus.ACTIVE,
         emailVerified: this.parseBool(dto.emailVerified) ?? false,
+        roles:
+          roleIds.length > 0
+            ? { create: roleIds.map((roleId) => ({ roleId })) }
+            : undefined,
       },
       select: PUBLIC_SELECT,
     });
+
+    return this.serializeUser(user);
   }
 
   async findAll(query: QueryUsersDto) {
@@ -73,7 +105,7 @@ export class UsersService {
     }
 
     if (query.role) {
-      where.role = query.role;
+      where.roles = { some: { role: { name: { equals: query.role } } } };
     }
 
     if (query.status) {
@@ -98,7 +130,7 @@ export class UsersService {
     ]);
 
     return {
-      data: items,
+      data: items.map((u) => this.serializeUser(u)),
       meta: {
         page,
         limit,
@@ -118,41 +150,62 @@ export class UsersService {
       throw new NotFoundException('User not found.');
     }
 
-    return user;
+    return this.serializeUser(user);
   }
 
   async update(id: string, dto: UpdateUserDto, actor: AuthUser) {
     const user = await this.ensureExists(id);
 
-    // Prevent an admin from demoting themselves / locking themselves out
-    if (id === actor.id) {
-      if (dto.role && dto.role !== user.role) {
-        throw new BadRequestException(
-          'You cannot change your own role. Ask another admin.',
-        );
-      }
-      if (dto.status && dto.status !== UserStatus.ACTIVE) {
-        throw new BadRequestException(
-          'You cannot deactivate your own account.',
-        );
+    // Prevent admins from removing their own last/senior access.
+    if (id === actor.id && dto.roleIds !== undefined) {
+      const currentNames = await this.getRoleNames(id);
+      if (currentNames.includes('ADMIN')) {
+        const newNames = await this.resolveRoleNames(dto.roleIds);
+        if (!newNames.includes('ADMIN')) {
+          throw new BadRequestException(
+            'You cannot remove all ADMIN roles from your own account.',
+          );
+        }
       }
     }
 
-    return this.prisma.user.update({
+    if (id === actor.id && dto.status && dto.status !== UserStatus.ACTIVE) {
+      throw new BadRequestException('You cannot deactivate your own account.');
+    }
+
+    const roleIds =
+      dto.roleIds !== undefined
+        ? await this.validateRoleIds(dto.roleIds)
+        : undefined;
+
+    const updated = await this.prisma.user.update({
       where: { id },
       data: {
         firstName: dto.firstName,
         lastName: dto.lastName,
         phone: dto.phone,
-        role: dto.role,
         status: dto.status,
+        data:
+          dto.data !== undefined
+            ? ((dto.data ?? Prisma.JsonNull) as Prisma.InputJsonValue)
+            : undefined,
         emailVerified:
           dto.emailVerified !== undefined
             ? this.parseBool(dto.emailVerified)
             : undefined,
+        ...(roleIds !== undefined
+          ? {
+              roles: {
+                deleteMany: {},
+                create: roleIds.map((roleId) => ({ roleId })),
+              },
+            }
+          : {}),
       },
       select: PUBLIC_SELECT,
     });
+
+    return this.serializeUser(updated);
   }
 
   async setStatus(id: string, status: UserStatus, actor: AuthUser) {
@@ -160,23 +213,12 @@ export class UsersService {
       throw new BadRequestException('You cannot deactivate your own account.');
     }
     await this.ensureExists(id);
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id },
       data: { status },
       select: PUBLIC_SELECT,
     });
-  }
-
-  async setRole(id: string, role: Role, actor: AuthUser) {
-    if (id === actor.id) {
-      throw new BadRequestException('You cannot change your own role.');
-    }
-    await this.ensureExists(id);
-    return this.prisma.user.update({
-      where: { id },
-      data: { role },
-      select: PUBLIC_SELECT,
-    });
+    return this.serializeUser(updated);
   }
 
   async updatePassword(id: string, dto: UpdatePasswordDto) {
@@ -196,6 +238,51 @@ export class UsersService {
     await this.ensureExists(id);
     await this.prisma.user.delete({ where: { id } });
     return { success: true, id };
+  }
+
+  private serializeUser(user: SerializedUser) {
+    const { roles, ...rest } = user;
+    return {
+      ...rest,
+      roles: roles.map((r) => ({
+        id: r.role.id,
+        name: r.role.name,
+        description: r.role.description,
+      })),
+    };
+  }
+
+  private async getRoleNames(userId: string): Promise<string[]> {
+    const rows = await this.prisma.userRole.findMany({
+      where: { userId },
+      select: { role: { select: { name: true } } },
+    });
+    return rows.map((r) => r.role.name);
+  }
+
+  private async validateRoleIds(roleIds: string[]): Promise<string[]> {
+    if (roleIds.length === 0) return [];
+    const found = await this.prisma.role.findMany({
+      where: { id: { in: roleIds } },
+      select: { id: true },
+    });
+    const validIds = new Set(found.map((r) => r.id));
+    const missing = roleIds.filter((id) => !validIds.has(id));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Unknown role id(s): ${missing.join(', ')}`,
+      );
+    }
+    return roleIds;
+  }
+
+  private async resolveRoleNames(roleIds: string[]): Promise<string[]> {
+    if (roleIds.length === 0) return [];
+    const found = await this.prisma.role.findMany({
+      where: { id: { in: roleIds } },
+      select: { name: true },
+    });
+    return found.map((r) => r.name);
   }
 
   private async ensureExists(id: string) {

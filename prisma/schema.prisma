@@ -8,11 +8,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role {
-  USER
-  ADMIN
-}
-
 enum UserStatus {
   ACTIVE
   INACTIVE
@@ -25,15 +20,40 @@ model User {
   firstName     String?
   lastName      String?
   phone         String?
-  role          Role           @default(USER)
+  data          Json?
   status        UserStatus     @default(ACTIVE)
   emailVerified Boolean        @default(false)
   lastLoginAt   DateTime?
   refreshTokens RefreshToken[]
+  roles         UserRole[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
   @@map("users")
+}
+
+model Role {
+  id          String     @id @default(uuid())
+  name        String     @unique
+  description String?
+  data        Json?
+  users       UserRole[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
 }
 
 model RefreshToken {

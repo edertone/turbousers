@@ -12,8 +12,9 @@ The service is **Dockerized** and ready to be consumed by any other application 
 
 - **REST API** — full CRUD for users with pagination, filtering, and search.
 - **Authentication** — register, login, refresh (with rotation), logout, and "me".
-- **RBAC** — `ADMIN` and `USER` roles; admin-only user management endpoints.
-- **Server-rendered dashboard** — a lightweight HTML/JS dashboard served by NestJS to list/edit/operate on users without a separate frontend build.
+- **Configurable RBAC** — create/edit roles with descriptions and arbitrary JSON data; assign **multiple** roles to users; admin-only user/role management endpoints.
+- **Arbitrary JSON data** — store any extra structured data on both users and roles.
+- **Server-rendered dashboard** — a lightweight HTML/JS dashboard served by NestJS to manage users **and roles** (including role assignment and JSON data editing) without a separate frontend build.
 - **PostgreSQL + Prisma** — type-safe data access with migrations.
 - **Dockerized** — `docker compose up` gives a working stack (app + database) with auto-seeding.
 - **Security** — bcrypt password hashing, refresh tokens stored hashed (SHA-256), helmet, guarded routes.
@@ -129,13 +130,13 @@ Seeding is **idempotent** — existing users are never duplicated. Control it wi
 
 Base URL: `http://localhost:3000/api`.
 
-All user-management endpoints require a valid access token in the `Authorization: Bearer <token>` header, and are restricted to `ADMIN` role (except `/api/auth` and `/api/users/me`).
+All user-management endpoints require a valid access token in the `Authorization: Bearer <token>` header, and are restricted to the `ADMIN` role (except `/api/auth` and `/api/users/me`). Because roles are configurable, RBAC checks are done by **role name**.
 
 ### Authentication
 
 #### `POST /api/auth/register`
 
-Create a self-service account (always `USER` role, `ACTIVE`).
+Create a self-service account (`ACTIVE`, no roles assigned — an admin assigns roles later).
 
 ```json
 {
@@ -158,7 +159,7 @@ Returns:
 
 ```json
 {
-  "user": { "id": "...", "email": "...", "role": "ADMIN", "status": "ACTIVE" },
+  "user": { "id": "...", "email": "...", "roles": ["ADMIN"], "status": "ACTIVE", "data": null },
   "tokens": { "accessToken": "...", "refreshToken": "..." }
 }
 ```
@@ -200,25 +201,25 @@ List users with filtering and pagination. Admin only.
 | Query param  | Type     | Description |
 | ------------ | -------- | ----------- |
 | `search`     | string   | Case-insensitive match on email / first / last name / phone. |
-| `role`       | `ADMIN` \| `USER` | Filter by role. |
+| `role`       | string   | Filter by role **name** (e.g. `ADMIN`, `MODERATOR`). |
 | `status`     | `ACTIVE` \| `INACTIVE` | Filter by status. |
 | `page`       | number   | Page number, default `1`. |
 | `limit`      | number   | Page size, default `20`, max `100`. |
 | `sortBy`     | string   | `createdAt` \| `email` \| `firstName` \| `lastName`, default `createdAt`. |
 | `sortOrder`  | `asc` \| `desc` | Sort direction, default `desc`. |
 
-Response:
+Response (each user includes a `roles` array of `{ id, name, description }` and an arbitrary `data` JSON object):
 
 ```json
 {
-  "data": [ { "id": "...", "email": "...", "role": "USER", "status": "ACTIVE" } ],
+  "data": [ { "id": "...", "email": "...", "roles": [{ "id": "...", "name": "ADMIN", "description": null }], "data": null, "status": "ACTIVE" } ],
   "meta": { "page": 1, "limit": 20, "total": 6, "totalPages": 1 }
 }
 ```
 
 #### `POST /api/users`
 
-Create a user (admin can set role/status).
+Create a user (admin can set roles and status). Roles are referenced by their UUID `roleIds`.
 
 ```json
 {
@@ -226,8 +227,9 @@ Create a user (admin can set role/status).
   "password": "Str0ngPass",
   "firstName": "Grace",
   "lastName": "Hopper",
-  "role": "USER",
-  "status": "ACTIVE"
+  "roleIds": ["<role-uuid>"],
+  "status": "ACTIVE",
+  "data": { "department": "eng", "locale": "en-US" }
 }
 ```
 
@@ -237,10 +239,10 @@ Get a single user by UUID.
 
 #### `PATCH /api/users/:id`
 
-Partially update a user. All fields optional. You cannot change your **own** role or deactivate your **own** account.
+Partially update a user. All fields optional. `roleIds` replaces the user's full set of roles. `data` sets (or clears) the arbitrary JSON payload. You cannot deactivate your **own** account or remove the last `ADMIN` role from yourself.
 
 ```json
-{ "firstName": "Grace", "role": "ADMIN", "emailVerified": true }
+{ "firstName": "Grace", "roleIds": ["<admin-role-uuid>"], "data": { "level": 3 }, "emailVerified": true }
 ```
 
 #### `PATCH /api/users/:id/status`
@@ -249,14 +251,6 @@ Set a user's status: `ACTIVE` or `INACTIVE`. You cannot deactivate your own acco
 
 ```json
 { "status": "INACTIVE" }
-```
-
-#### `PATCH /api/users/:id/role`
-
-Set a user's role: `ADMIN` or `USER`. You cannot change your own role.
-
-```json
-{ "role": "ADMIN" }
 ```
 
 #### `PATCH /api/users/:id/password`
@@ -274,6 +268,54 @@ Returns `{ "success": true }`.
 Delete a user. You cannot delete your own account.
 
 Returns `{ "success": true, "id": "..." }`.
+
+### Roles
+
+Roles are configurable records with a unique `name`, an optional `description`, and arbitrary JSON `data`. A user can hold **many** roles, and a role can be assigned to **many** users. The default seed creates `ADMIN` and `USER`. All role endpoints are admin-only.
+
+#### `GET /api/roles`
+
+List all roles. Each entry includes a `userCount`.
+
+#### `POST /api/roles`
+
+Create a role. `name` is required and unique (letters, numbers, `_` and `-`).
+
+```json
+{ "name": "MODERATOR", "description": "Can moderate content", "data": { "permissions": ["read", "moderate"] } }
+```
+
+#### `GET /api/roles/:id`
+
+Get a single role including `userCount` and the list of assigned `userIds`.
+
+#### `PATCH /api/roles/:id`
+
+Update a role's `name`, `description` or `data`.
+
+```json
+{ "description": "Can moderate content and users", "data": { "permissions": ["read", "moderate", "delete"] } }
+```
+
+#### `DELETE /api/roles/:id`
+
+Delete a role. Fails if any user is still assigned to it.
+
+#### `GET /api/roles/users/:userId`
+
+Get the roles assigned to a user.
+
+#### `PATCH /api/roles/users/:userId`
+
+Replace the roles assigned to a user.
+
+```json
+{ "roleIds": ["<role-uuid-1>", "<role-uuid-2>"] }
+```
+
+#### `DELETE /api/roles/users/:userId/:roleId`
+
+Remove a specific role from a user.
 
 ### Health
 
@@ -293,22 +335,23 @@ Passwords must be at least **8 characters** and contain at least one lowercase l
 
 ## Data model
 
-Two tables:
+Four tables:
 
-- **`users`** — `id` (UUID), `email` (unique), `passwordHash`, `firstName`, `lastName`, `phone`, `role` (`USER`/`ADMIN`), `status` (`ACTIVE`/`INACTIVE`), `emailVerified`, `lastLoginAt`, `createdAt`, `updatedAt`.
+- **`users`** — `id` (UUID), `email` (unique), `passwordHash`, `firstName`, `lastName`, `phone`, `data` (arbitrary JSON), `status` (`ACTIVE`/`INACTIVE`), `emailVerified`, `lastLoginAt`, `createdAt`, `updatedAt`.
+- **`roles`** — `id` (UUID), `name` (unique), `description`, `data` (arbitrary JSON), `createdAt`, `updatedAt`.
+- **`user_roles`** — join table (`userId`, `roleId`) mapping users to roles (many-to-many), with cascade deletes.
 - **`refresh_tokens`** — hashed refresh tokens with `expiresAt` and `revokedAt` (supporting rotation), foreign keyed to `users` with cascade delete.
 
 ---
 
 ## Dashboard
 
-A server-rendered dashboard is served by NestJS at **`/dashboard`** (index redirects there).
+A server-rendered dashboard is served by NestJS at **`/dashboard`** (index redirects there), with two tabs:
 
-- Log in with `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD`.
-- List users with pagination and search.
-- Create new users.
-- Edit a user's fields, role, status, and password.
-- Delete users (with confirmation).
+- **Users** — list with pagination, search and role/status filters; create users; edit a user's profile fields, **roles**, **JSON data** and status; delete users.
+- **Roles** — create, edit (name/description/JSON data) and delete configurable roles.
+
+Log in with `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD`.
 
 The dashboard uses its own session cookie (`dashboard_token`) signed with `DASHBOARD_SECRET`. If served over plain HTTP keep `COOKIE_SECURE=false`; set it to `true` for HTTPS.
 

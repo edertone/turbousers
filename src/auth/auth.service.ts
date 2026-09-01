@@ -9,7 +9,12 @@ import { User, UserStatus } from '@prisma/client';
 import { compare, hash } from 'bcryptjs';
 import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { LoginDto, LogoutDto, RefreshTokenDto, RegisterDto } from './dto/auth.dto';
+import {
+  LoginDto,
+  LogoutDto,
+  RefreshTokenDto,
+  RegisterDto,
+} from './dto/auth.dto';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from './types/jwt-payload.interface';
 
@@ -17,6 +22,10 @@ export interface TokenPair {
   accessToken: string;
   refreshToken: string;
 }
+
+type UserWithRoles = User & {
+  roles: { role: { name: string } }[];
+};
 
 @Injectable()
 export class AuthService {
@@ -44,15 +53,29 @@ export class AuthService {
         firstName: dto.firstName,
         lastName: dto.lastName,
       },
-      select: this.publicUserSelect(),
+      select: {
+        id: true,
+        email: true,
+        status: true,
+        emailVerified: true,
+        firstName: true,
+        lastName: true,
+        data: true,
+      },
     });
 
-    return user;
+    return {
+      ...user,
+      roles: [] as string[],
+    };
   }
 
   async login(dto: LoginDto): Promise<{ user: AuthUser; tokens: TokenPair }> {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase() },
+      include: {
+        roles: { select: { role: { select: { name: true } } } },
+      },
     });
 
     if (!user) {
@@ -82,12 +105,15 @@ export class AuthService {
   async refresh(dto: RefreshTokenDto): Promise<TokenPair> {
     let payload: JwtPayload;
     try {
-      payload = await this.jwtService.verifyAsync<JwtPayload>(dto.refreshToken, {
-        secret: this.configService.get<string>(
-          'JWT_REFRESH_SECRET',
-          'change_me_refresh_secret',
-        ),
-      });
+      payload = await this.jwtService.verifyAsync<JwtPayload>(
+        dto.refreshToken,
+        {
+          secret: this.configService.get<string>(
+            'JWT_REFRESH_SECRET',
+            'change_me_refresh_secret',
+          ),
+        },
+      );
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token.');
     }
@@ -96,10 +122,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid token type.');
     }
 
-        const tokenHash = this.hashToken(dto.refreshToken);
-        const stored = await this.prisma.refreshToken.findUnique({
-          where: { token: tokenHash },
-        });
+    const tokenHash = this.hashToken(dto.refreshToken);
+    const stored = await this.prisma.refreshToken.findUnique({
+      where: { token: tokenHash },
+    });
 
     if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
       throw new UnauthorizedException('Refresh token is invalid or revoked.');
@@ -107,6 +133,9 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: stored.userId },
+      include: {
+        roles: { select: { role: { select: { name: true } } } },
+      },
     });
 
     if (!user || user.status !== UserStatus.ACTIVE) {
@@ -123,31 +152,50 @@ export class AuthService {
   }
 
   async logout(dto: LogoutDto): Promise<{ success: boolean }> {
-      const tokenHash = this.hashToken(dto.refreshToken);
-      await this.prisma.refreshToken.updateMany({
-        where: { token: tokenHash, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
-      return { success: true };
-    }
+    const tokenHash = this.hashToken(dto.refreshToken);
+    await this.prisma.refreshToken.updateMany({
+      where: { token: tokenHash, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    return { success: true };
+  }
 
   async validateUserById(id: string): Promise<AuthUser | null> {
     const user = await this.prisma.user.findUnique({
       where: { id },
-      select: this.publicUserSelect(),
+      select: {
+        id: true,
+        email: true,
+        status: true,
+        emailVerified: true,
+        firstName: true,
+        lastName: true,
+        data: true,
+        roles: {
+          select: { role: { select: { name: true } } },
+        },
+      },
     });
 
     if (!user || user.status !== UserStatus.ACTIVE) {
       return null;
     }
-    return user;
+    return {
+      id: user.id,
+      email: user.email,
+      status: user.status,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      data: user.data,
+      roles: user.roles.map((r) => r.role.name),
+    };
   }
 
-  private async generateTokens(user: User): Promise<TokenPair> {
+  private async generateTokens(user: UserWithRoles): Promise<TokenPair> {
     const base: Omit<JwtPayload, 'type'> = {
       sub: user.id,
       email: user.email,
-      role: user.role,
+      roles: user.roles.map((r) => r.role.name),
     };
 
     const accessToken = await this.jwtService.signAsync(
@@ -157,18 +205,24 @@ export class AuthService {
           'JWT_ACCESS_SECRET',
           'change_me_access_secret',
         ),
-        expiresIn: this.configService.get<string>('JWT_ACCESS_EXPIRES_IN', '15m'),
+        expiresIn: this.configService.get<string>(
+          'JWT_ACCESS_EXPIRES_IN',
+          '15m',
+        ),
       },
     );
 
     const refreshString = await this.jwtService.signAsync(
-          { ...base, type: 'refresh', jti: randomUUID() },
+      { ...base, type: 'refresh', jti: randomUUID() },
       {
         secret: this.configService.get<string>(
           'JWT_REFRESH_SECRET',
           'change_me_refresh_secret',
         ),
-        expiresIn: this.configService.get<string>('JWT_REFRESH_EXPIRES_IN', '7d'),
+        expiresIn: this.configService.get<string>(
+          'JWT_REFRESH_EXPIRES_IN',
+          '7d',
+        ),
       },
     );
 
@@ -190,7 +244,7 @@ export class AuthService {
   }
 
   private hashToken(token: string): string {
-      return createHash('sha256').update(token).digest('hex');
+    return createHash('sha256').update(token).digest('hex');
   }
 
   private parseExpiry(value: string): number {
@@ -204,29 +258,15 @@ export class AuthService {
     return amount * multiplier;
   }
 
-  private publicUserSelect() {
-    return {
-      id: true,
-      email: true,
-      role: true,
-      status: true,
-      emailVerified: true,
-      firstName: true,
-      lastName: true,
-      lastLoginAt: true,
-      createdAt: true,
-      updatedAt: true,
-    } as const;
-  }
-
-  private toAuthUser(user: User): AuthUser {
+  private toAuthUser(user: UserWithRoles): AuthUser {
     return {
       id: user.id,
       email: user.email,
-      role: user.role,
       status: user.status,
       firstName: user.firstName,
       lastName: user.lastName,
+      data: user.data,
+      roles: user.roles.map((r) => r.role.name),
     };
   }
 }

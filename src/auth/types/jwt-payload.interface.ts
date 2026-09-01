@@ -1,7 +1,7 @@
 export interface JwtPayload {
   sub: string; // user id
   email: string;
-  role: string;
+  roles: string[];
   type: 'access' | 'refresh';
   jti?: string;
 }
