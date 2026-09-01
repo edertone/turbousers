@@ -4,6 +4,8 @@ A self-contained **user management microservice** built with **NestJS**, **TypeS
 
 The service is **Dockerized** and ready to be consumed by any other application via its HTTP API. It ships with full authentication (JWT + refresh token rotation), role-based access control (RBAC), and automatic database seeding on first launch.
 
+> **Containerized only.** This project is designed to run **exclusively inside Docker** as a microservice. It is not set up for a local dev server, a `dist` build, or a local compilation step — everything runs through the container (TypeScript is executed directly via `ts-node`).
+
 ---
 
 ## Features
@@ -58,26 +60,21 @@ docker compose down -v
 
 ---
 
-## Local development (without Docker)
+## Development
 
-Requires Node.js ≥ 20 and a running PostgreSQL instance.
+This project **does not** run outside of Docker. There is no local `dist` build, no `start:dev`, and no compilation step — the container runs TypeScript directly via `ts-node`.
+
+To develop, edit the source and rebuild/restart the containers:
 
 ```bash
-# 1. Install dependencies
-npm install
+docker compose up --build -d
+docker compose logs -f app
+```
 
-# 2. Configure environment
-cp .env.example .env
-#   edit .env -> point POSTGRES_* / DATABASE_URL at your database
+To run a one-off command inside the running container (e.g. interactive Prisma Studio):
 
-# 3. Create the database schema
-npx prisma migrate dev
-
-# 4. (optional) seed admin + demo users
-npm run seed
-
-# 5. Start in watch mode
-npm run start:dev
+```bash
+docker compose exec app npm run prisma:studio
 ```
 
 ---
@@ -113,7 +110,7 @@ All variables have safe defaults. **Always override the secrets in production.**
 
 ## Seeding
 
-On container startup (and via `npm run seed`) the service ensures an initial **admin** exists, and optionally seeds 5 demo users:
+On container startup the service ensures an initial **admin** exists, and optionally seeds 5 demo users:
 
 | Email                  | Role  | Password  |
 | ---------------------- | ----- | --------- |
@@ -369,11 +366,11 @@ prisma/
 
 ## Available scripts
 
+These run **inside the container** (via `docker compose exec app ...`) — they are not for a local host workflow.
+
 | Script                 | Description |
 | ---------------------- | ----------- |
-| `npm run start:dev`    | Run NestJS in watch mode. |
-| `npm run build`        | Compile to `dist/`. |
-| `npm run start:prod`   | Run the compiled `dist/main`. |
+| `npm start`            | Start the service via `ts-node` (no build step). |
 | `npm run seed`         | Run the seeder. |
 | `npm run prisma:migrate` | Create/apply dev migration. |
 | `npm run prisma:deploy`  | Apply migrations against the database. |

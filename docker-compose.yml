@@ -17,11 +17,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      # Cover the longer first-time initialization of a fresh data directory.
+      start_period: 60s
 
   app:
     build:
       context: .
-      target: production
     container_name: usersvc-app
     restart: unless-stopped
     depends_on:

@@ -1,47 +1,32 @@
-# ---------- Development stage ----------
-FROM node:20-alpine AS development
-
-WORKDIR /usr/src/app
-
-# Copy dependency manifests
-COPY package*.json ./
-
-# Install dependencies (including dev deps for building)
-RUN npm install
-
-# Copy Prisma schema first for generate
-COPY prisma ./prisma
-
-# Copy rest of source
-COPY . .
-
-# Generate Prisma client
-RUN npx prisma generate
-
-RUN npm run build
-
-# ---------- Production stage ----------
-FROM node:20-alpine AS production
-
-ARG NODE_ENV=production
-ENV NODE_ENV=${NODE_ENV}
+# ---------- Single-stage image ----------
+# The service runs TypeScript directly via ts-node — no build step, no dist output.
+# It is designed to run exclusively inside a container.
+FROM node:20-alpine
 
 WORKDIR /usr/src/app
 
 # Prisma engine requires OpenSSL at runtime on alpine
 RUN apk add --no-cache openssl libc6-compat
 
+# Copy dependency manifests
 COPY package*.json ./
 
-RUN npm install --omit=dev && npm cache clean --force
+# Install ALL dependencies (including devDependencies: typescript, @types/*,
+# and ts-node are required to run TypeScript directly at runtime).
+# Force a full install regardless of NODE_ENV.
+RUN NODE_ENV=development npm install && npm cache clean --force
 
-# Copy compiled output
-COPY --from=development /usr/src/app/dist ./dist
+# Copy Prisma schema first for client generation
+COPY prisma ./prisma
 
-# Copy Prisma schema + migrations for runtime `migrate deploy`
-COPY --from=development /usr/src/app/prisma ./prisma
-COPY --from=development /usr/src/app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=development /usr/src/app/node_modules/@prisma ./node_modules/@prisma
+# Generate Prisma client
+RUN npx prisma generate
+
+# Copy rest of source
+COPY . .
+
+# Runtime environment is production
+ENV NODE_ENV=production
 
 # Copy entrypoint
 COPY docker-entrypoint.sh ./
