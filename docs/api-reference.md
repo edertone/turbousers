@@ -4,6 +4,35 @@ Base URL: `http://localhost:3000/api`.
 
 All user-management endpoints require a valid access token in the `Authorization: Bearer <token>` header, and are restricted to the `ADMIN` role (except `/api/auth` and `/api/users/me`). Because roles are configurable, RBAC checks are done by **role name**.
 
+## Index
+
+- [Authentication](#authentication)
+  - [`POST /api/auth/register`](#post-apiauthregister)
+  - [`POST /api/auth/login`](#post-apiauthlogin)
+  - [`POST /api/auth/refresh`](#post-apiauthrefresh)
+  - [`POST /api/auth/logout`](#post-apiauthlogout)
+  - [`GET /api/auth/me`](#get-apiauthme)
+- [Users (ADMIN only, except `GET /api/users/me`)](#users-admin-only-except-get-apiusersme)
+  - [`GET /api/users/me`](#get-apiusersme)
+  - [`GET /api/users`](#get-apiusers)
+  - [`POST /api/users`](#post-apiusers)
+  - [`GET /api/users/:id`](#get-apiusersid)
+  - [`PATCH /api/users/:id`](#patch-apiusersid)
+  - [`PATCH /api/users/:id/status`](#patch-apiusersidstatus)
+  - [`PATCH /api/users/:id/password`](#patch-apiusersidpassword)
+  - [`DELETE /api/users/:id`](#delete-apiusersid)
+- [Roles](#roles)
+  - [`GET /api/roles`](#get-apiroles)
+  - [`POST /api/roles`](#post-apiroles)
+  - [`GET /api/roles/:id`](#get-apirolesid)
+  - [`PATCH /api/roles/:id`](#patch-apirolesid)
+  - [`DELETE /api/roles/:id`](#delete-apirolesid)
+  - [`GET /api/roles/users/:userId`](#get-apirolesusersuserid)
+  - [`PATCH /api/roles/users/:userId`](#patch-apirolesusersuserid)
+  - [`DELETE /api/roles/users/:userId/:roleId`](#delete-apirolesusersuseridroleid)
+- [Health](#health)
+  - [`GET /api/health`](#get-apihealth)
+
 ## Authentication
 
 ### `POST /api/auth/register`
